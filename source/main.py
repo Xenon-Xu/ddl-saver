@@ -121,10 +121,11 @@ class MainWin(QMainWindow, Ui_MainWindow):
 
     def showWarnCountTimeWin(self, info=False):
         warningText = ''
-        for ddl in  self.ddlList:
-            if ddl['count down time'] < self.settings['count down warning time']:
-                warningText += '{} 剩余 {} 天 {} 小时 {} 分\n'.format(
-                    ddl['name'], ddl['count down time'][0], ddl['count down time'][1], ddl['count down time'][2])
+        for ddl in self.ddlList:
+            if ddl['effect']:
+                if ddl['count down time'] < self.settings['count down warning time']:
+                    warningText += '{} 剩余 {} 天 {} 小时 {} 分\n'.format(
+                        ddl['name'], ddl['count down time'][0], ddl['count down time'][1], ddl['count down time'][2])
         if warningText != '':
             QMessageBox.warning(self, '倒计时预警', '{}\n即将到期'.format(warningText))
         else:
