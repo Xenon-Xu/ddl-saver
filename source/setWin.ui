@@ -9,19 +9,19 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>420</width>
+    <width>430</width>
     <height>221</height>
    </rect>
   </property>
   <property name="minimumSize">
    <size>
-    <width>420</width>
+    <width>430</width>
     <height>221</height>
    </size>
   </property>
   <property name="maximumSize">
    <size>
-    <width>420</width>
+    <width>430</width>
     <height>221</height>
    </size>
   </property>
@@ -55,24 +55,10 @@
       <layout class="QGridLayout" name="gridLayout_3">
        <item row="0" column="0">
         <layout class="QGridLayout" name="gridLayout_2">
-         <item row="3" column="4">
-          <widget class="QCheckBox" name="warningWinCheckBox">
-           <property name="text">
-            <string/>
-           </property>
-          </widget>
-         </item>
          <item row="2" column="0">
           <widget class="QLabel" name="label_2">
            <property name="text">
             <string>倒计时小于</string>
-           </property>
-          </widget>
-         </item>
-         <item row="3" column="1" colspan="3">
-          <widget class="QLabel" name="label_6">
-           <property name="text">
-            <string>启动时预警弹窗</string>
            </property>
           </widget>
          </item>
@@ -107,7 +93,7 @@
          <item row="3" column="5" colspan="2">
           <widget class="QPushButton" name="warningWinPushButton">
            <property name="text">
-            <string>弹窗预览</string>
+            <string>预警预览</string>
            </property>
           </widget>
          </item>
@@ -159,7 +145,35 @@
            </property>
           </widget>
          </item>
+         <item row="3" column="1" colspan="2">
+          <widget class="QCheckBox" name="warningWinCheckBox">
+           <property name="text">
+            <string>弹窗预警</string>
+           </property>
+          </widget>
+         </item>
+         <item row="3" column="3" colspan="2">
+          <widget class="QCheckBox" name="warningToastCheckBox">
+           <property name="text">
+            <string>通知预警</string>
+           </property>
+          </widget>
+         </item>
         </layout>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="actionTab">
+      <attribute name="title">
+       <string>动作</string>
+      </attribute>
+      <layout class="QGridLayout" name="gridLayout_4">
+       <item row="0" column="0">
+        <widget class="QCheckBox" name="remTrayCheckBox">
+         <property name="text">
+          <string>记住关闭按钮动作</string>
+         </property>
+        </widget>
        </item>
       </layout>
      </widget>
@@ -219,8 +233,25 @@
     </hint>
    </hints>
   </connection>
+  <connection>
+   <sender>warningWinCheckBox</sender>
+   <signal>clicked()</signal>
+   <receiver>setWin</receiver>
+   <slot>setWarnSignalEmit()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>124</x>
+     <y>141</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>129</x>
+     <y>2</y>
+    </hint>
+   </hints>
+  </connection>
  </connections>
  <slots>
   <slot>showWarnWinButtonPressAction()</slot>
+  <slot>setWarnSignalEmit()</slot>
  </slots>
 </ui>

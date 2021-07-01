@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1284</width>
+    <width>1326</width>
     <height>600</height>
    </rect>
   </property>
@@ -318,7 +318,7 @@
           <bool>true</bool>
          </property>
          <property name="selectionMode">
-          <enum>QAbstractItemView::ContiguousSelection</enum>
+          <enum>QAbstractItemView::MultiSelection</enum>
          </property>
          <property name="selectionBehavior">
           <enum>QAbstractItemView::SelectRows</enum>
@@ -333,7 +333,7 @@
           <bool>true</bool>
          </attribute>
          <attribute name="horizontalHeaderDefaultSectionSize">
-          <number>135</number>
+          <number>125</number>
          </attribute>
          <attribute name="horizontalHeaderStretchLastSection">
           <bool>true</bool>
@@ -368,6 +368,11 @@
            <string>倒计时</string>
           </property>
          </column>
+         <column>
+          <property name="text">
+           <string>完成情况</string>
+          </property>
+         </column>
         </widget>
        </item>
       </layout>
@@ -387,13 +392,6 @@
       <layout class="QGridLayout" name="gridLayout_4">
        <item row="1" column="1">
         <layout class="QGridLayout" name="gridLayout_3">
-         <item row="3" column="1" colspan="2">
-          <widget class="QPushButton" name="setPushButton">
-           <property name="text">
-            <string>设置</string>
-           </property>
-          </widget>
-         </item>
          <item row="2" column="2">
           <widget class="QPushButton" name="delPushButton">
            <property name="enabled">
@@ -463,6 +461,23 @@
            </property>
           </widget>
          </item>
+         <item row="3" column="1">
+          <widget class="QPushButton" name="setPushButton">
+           <property name="text">
+            <string>设置</string>
+           </property>
+          </widget>
+         </item>
+         <item row="3" column="2">
+          <widget class="QPushButton" name="completePushButton">
+           <property name="enabled">
+            <bool>false</bool>
+           </property>
+           <property name="text">
+            <string>标记为已完成</string>
+           </property>
+          </widget>
+         </item>
         </layout>
        </item>
       </layout>
@@ -489,7 +504,7 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>1284</width>
+     <width>1326</width>
      <height>26</height>
     </rect>
    </property>
@@ -561,8 +576,8 @@
    <slot>delDdlAction()</slot>
    <hints>
     <hint type="sourcelabel">
-     <x>1107</x>
-     <y>499</y>
+     <x>1280</x>
+     <y>515</y>
     </hint>
     <hint type="destinationlabel">
      <x>1084</x>
@@ -593,8 +608,8 @@
    <slot>saveDdlAction()</slot>
    <hints>
     <hint type="sourcelabel">
-     <x>982</x>
-     <y>498</y>
+     <x>1130</x>
+     <y>515</y>
     </hint>
     <hint type="destinationlabel">
      <x>848</x>
@@ -650,6 +665,22 @@
     </hint>
    </hints>
   </connection>
+  <connection>
+   <sender>completePushButton</sender>
+   <signal>clicked()</signal>
+   <receiver>MainWindow</receiver>
+   <slot>alterCompleteAction()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>1198</x>
+     <y>536</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>1186</x>
+     <y>572</y>
+    </hint>
+   </hints>
+  </connection>
  </connections>
  <slots>
   <slot>showAddDdlWin()</slot>
@@ -660,5 +691,6 @@
   <slot>selectDdlRow()</slot>
   <slot>showSetWin()</slot>
   <slot>showInfo()</slot>
+  <slot>alterCompleteAction()</slot>
  </slots>
 </ui>

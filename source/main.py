@@ -1,18 +1,24 @@
 import sys
-from PyQt5.QtWidgets import QApplication, QMainWindow, QFileDialog, QTableWidgetItem, QDialog, QMessageBox, QWidget
+from PyQt5.QtWidgets import QApplication, QMainWindow, QFileDialog, QTableWidgetItem, QDialog, QMessageBox
 from PyQt5.QtGui import QPainter, QPixmap, QColor, QBrush, QTextCharFormat, QMouseEvent
-from PyQt5.QtCore import Qt, QPoint, QTime, QDate, pyqtSignal, QTimer
+from PyQt5.QtCore import Qt, QPoint, QTime, QDate, pyqtSignal, QTimer, QEvent
 from mainWin import *
 from addDdlWin import *
 from setWin import *
+from trayIcon import *
+from trayQuestionDialog import *
 import os
-import time
 import datetime
 import csv
 import pickle
+import threading
 from functools import cmp_to_key
 from math import inf
 from constants import *
+from functions import *
+
+if IS_WIN10_SYS and SHOW_WIN10_NOTIFICATION:
+    from win10toast import ToastNotifier
 
 
 class MainWin(QMainWindow, Ui_MainWindow):
@@ -28,8 +34,15 @@ class MainWin(QMainWindow, Ui_MainWindow):
         self.settings = {
             'sort rule': IMPORTANCE_PRIORITY,
             'count down warning time': [1, 0, 0],
-            'count down warning win': True
+            'count down warning win': True,
+            'show toast': SHOW_WIN10_NOTIFICATION and IS_WIN10_SYS,
+            'minimize': True,
+            'remember close action': False
         }
+
+        self.trayicon = TrayIcon(self)
+        self.trayicon.show()
+
         self.ddlModified = False  # whether ddl list has been modified
 
         self.ddlList = []  # maintain DDLs
@@ -41,30 +54,44 @@ class MainWin(QMainWindow, Ui_MainWindow):
 
         self.addDdlWin = addDdlWin()
         self.setWin = setWin()
+        self.trayQuestionDialog = trayQuestionDialog()
 
         self.addDdlWin.addDdlWinSignal.connect(self.addDDlAction)  # signal connected
         self.addDdlWin.modDdlWinSignal.connect(self.modDDlAction)
         self.setWin.setSortRuleSignal.connect(self.setSortRuleAction)
         self.setWin.setWarnSignal.connect(self.setWarnAction)
+        self.setWin.remTrayCheckedSignal.connect(self.setRemTrayAction)
         self.setWin.showWarnWinButtonPressSignal.connect(self.showWarnCountTimeWinManually)
         self.setWin.setFinishedSignal.connect(self.settingSaveAction)  # update signal
+        self.trayicon.exitSignal.connect(self.ask_before_close)
+        self.trayicon.openSignal.connect(self.recover_from_tray)
+        self.trayicon.traySignal.connect(self.minimize_to_tray)
+        self.trayQuestionDialog.minimizeToTraySignal.connect(self.minimize_to_tray)
+        self.trayQuestionDialog.rememberTrayChoiceSignal.connect(self.setRemTrayAction)
+        self.trayQuestionDialog.exitSignal.connect(self.ask_before_close)
+        self.trayQuestionDialog.setCloseActionSignal.connect(self.setCloseAction)
+        self.trayQuestionDialog.settingSaveActionSignal.connect(self.settingSaveAction)
 
         main_update_timer = QTimer(self)  # set update timer
         main_update_timer.timeout.connect(self.main_update)
         main_update_timer.start(30000)  # update main UI every 30 seconds
 
+    def _thread_it(self, func, *args):
+        t = threading.Thread(target=func, args=args)
+        t.setDaemon(True)
+        t.start()
+
     def _ddlCmp_importance(self, ddl1: dict, ddl2: dict):
-        if not ddl1['effect'] or not ddl2['effect']:
-            if not ddl2['effect']:
-                return_value = True
-            else:
-                return_value = False
+        if (not ddl1['effect'] and ddl2['effect']) or (ddl1['effect'] and not ddl2['effect']):
+            return_value = not ddl2['effect']
+        elif ddl1['complete'] != ddl2['complete']:
+            return_value = ddl2['complete']
         elif ddl1['importance'] != ddl2['importance']:
             return_value = ddl1['importance'] < ddl2['importance']
         elif ddl1['date'] != ddl2['date']:
             return_value = ddl1['date'] < ddl2['date']
         elif ddl1['timespan'] != ddl2['timespan']:
-            return_value = ddl1['timespan'] < ddl2['timespan']
+            return_value = ddl1['timespan'][0:2] < ddl2['timespan'][0:2]
         else:
             return_value = ddl1['name'] < ddl2['name']
         if return_value:
@@ -73,17 +100,16 @@ class MainWin(QMainWindow, Ui_MainWindow):
             return 1
 
     def _ddlCmp_timeremain(self, ddl1: dict, ddl2: dict):
-        if not ddl1['effect'] or not ddl2['effect']:
-            if not ddl2['effect']:
-                return_value = True
-            else:
-                return_value = False
+        if (not ddl1['effect'] and ddl2['effect']) or (ddl1['effect'] and not ddl2['effect']):
+            return_value = not ddl2['effect']
+        elif ddl1['complete'] != ddl2['complete']:
+            return_value = ddl2['complete']
         elif ddl1['date'] != ddl2['date']:
             return_value = ddl1['date'] < ddl2['date']
+        elif ddl1['timespan'] != ddl2['timespan']:
+            return_value = ddl1['timespan'][0:2] < ddl2['timespan'][0:2]
         elif ddl1['importance'] != ddl2['importance']:
             return_value = ddl1['importance'] < ddl2['importance']
-        elif ddl1['timespan'] != ddl2['timespan']:
-            return_value = ddl1['timespan'] < ddl2['timespan']
         else:
             return_value = ddl1['name'] < ddl2['name']
         if return_value:
@@ -104,16 +130,30 @@ class MainWin(QMainWindow, Ui_MainWindow):
         time_now_t = self._time_now()
         return datetime.datetime(date_now_t[0], date_now_t[1], date_now_t[2], time_now_t[0], time_now_t[1])
 
-    def _draw_color_calendar(self, date: QDate, color: QColor):
+    def _draw_color_calendar(self, q_date: QDate, color: QColor):
         todayFormat = QTextCharFormat()
         todayFormat.setBackground(color)
-        self.calendarWidget.setDateTextFormat(date, todayFormat)
+        self.calendarWidget.setDateTextFormat(q_date, todayFormat)
+
+    def _remove_color_calendar(self, q_date: QDate):
+        self.calendarWidget.setDateTextFormat(q_date, NULL_TEXTCHARFORMAT)
 
     def _date_tuple2QDate(self, date: (int, int, int)):
         return QDate(date[0], date[1], date[2])
 
-    def main_update(self):
-        self.ddlTableUpdate()
+    def _date_not_colored(self, q_date: QDate):
+        for textDate, textFormat in self.calendarWidget.dateTextFormat().items():
+            if textDate == q_date:
+                if textFormat == NULL_TEXTCHARFORMAT:
+                    continue
+                else:
+                    return False
+        return True
+
+    def main_update(self, showWarnTip=False):
+        self.remove_color_calendar()
+        self.ddlStateShowUpdate(showWarnTip=showWarnTip)
+        self.selectDdlAction()
         self.noticeUpdate()
 
     def componentInit(self):
@@ -127,6 +167,16 @@ class MainWin(QMainWindow, Ui_MainWindow):
                     warningText += '{} 剩余 {} 天 {} 小时 {} 分\n'.format(
                         ddl['name'], ddl['count down time'][0], ddl['count down time'][1], ddl['count down time'][2])
         if warningText != '':
+            if 'win10toast' in sys.modules and SHOW_WIN10_NOTIFICATION and self.settings['show toast'] and IS_WIN10_SYS:
+                def showToaster():
+                    try:
+                        ToastNotifier().show_toast(
+                            '倒计时预警', '{}\n即将到期'.format(warningText)
+                            , duration=10, icon_path='icon.ico')
+                    except AttributeError:
+                        pass
+                self._thread_it(showToaster)
+            qApp.setQuitOnLastWindowClosed(False)
             QMessageBox.warning(self, '倒计时预警', '{}\n即将到期'.format(warningText))
         else:
             if info:
@@ -141,6 +191,9 @@ class MainWin(QMainWindow, Ui_MainWindow):
         self.setWin.countDownHourSpinBox.setValue(self.settings['count down warning time'][1])
         self.setWin.countDownMinuteSpinBox.setValue(self.settings['count down warning time'][2])
         self.setWin.warningWinCheckBox.setChecked(self.settings['count down warning win'])
+        if IS_WIN10_SYS and SHOW_WIN10_NOTIFICATION:
+            self.setWin.warningToastCheckBox.setChecked(self.settings['show toast'])
+        self.setWin.remTrayCheckBox.setChecked(self.settings['remember close action'])
 
         self.setWin.show()
 
@@ -197,15 +250,18 @@ class MainWin(QMainWindow, Ui_MainWindow):
                 return
 
     def addDDlAction(self, name, date_y, date_m, date_d, time1_h, time1_m, time2_h, time2_m, location, importance):
-        self.ddlTableAddRow(name, (date_y, date_m, date_d), (time1_h, time1_m, time2_h, time2_m), location, importance)
+        self.ddlTableAddRow(name, (date_y, date_m, date_d), (time1_h, time1_m, time2_h, time2_m), location, importance, complete=False)
         self.ddlSet.add(name)
         self.main_update()
         self.ddlModified = True
 
     def modDDlAction(self, name, date_y, date_m, date_d, time1_h, time1_m, time2_h, time2_m, location, importance):
-        self.ddlSet.remove(self.ddlList[self.ddlTableWidget.currentRow()]['name'])
-        self.ddlList.remove(self.ddlList[self.ddlTableWidget.currentRow()])
-        self.ddlTableAddRow(name, (date_y, date_m, date_d), (time1_h, time1_m, time2_h, time2_m), location, importance)
+        row_index = self.ddlTableWidget.currentRow()
+        self._remove_color_calendar(self._date_tuple2QDate(self.ddlList[row_index]['date']))
+        complete_t = self.ddlList[row_index]['complete']
+        self.ddlSet.remove(self.ddlList[row_index]['name'])
+        self.ddlList.remove(self.ddlList[row_index])
+        self.ddlTableAddRow(name, (date_y, date_m, date_d), (time1_h, time1_m, time2_h, time2_m), location, importance, complete_t)
         self.ddlSet.add(name)
         self.main_update()
         self.ddlModified = True
@@ -217,7 +273,9 @@ class MainWin(QMainWindow, Ui_MainWindow):
 
         judgment = QMessageBox.question(self, '删除', '确定删除 DDL: {} 吗？'.format(self.ddlList[row_index]['name']))
         if judgment == QMessageBox.Yes:
-            self._draw_color_calendar(self._date_tuple2QDate(self.ddlList[row_index]['date']), QCOLOR_WHITE)
+
+            self._remove_color_calendar(self._date_tuple2QDate(self.ddlList[row_index]['date']))
+
             self.ddlSet.remove(self.ddlList[row_index]['name'])
             self.ddlList.remove(self.ddlList[row_index])
             self.main_update()
@@ -234,6 +292,7 @@ class MainWin(QMainWindow, Ui_MainWindow):
 
             self.modPushButton.setEnabled(False)
             self.delPushButton.setEnabled(False)
+            self.completePushButton.setEnabled(False)
             return
         else:
             self.selectLineEdit.setEnabled(True)
@@ -243,6 +302,12 @@ class MainWin(QMainWindow, Ui_MainWindow):
 
             self.modPushButton.setEnabled(True)
             self.delPushButton.setEnabled(True)
+            self.completePushButton.setEnabled(True)
+
+            if self.ddlList[row_index]['complete']:
+                self.completePushButton.setText('标记为未完成')
+            else:
+                self.completePushButton.setText('标记为已完成')
 
     def saveDdlAction(self):
         judgment = QMessageBox.question(self, '保存DDL', '确定保存当前DDL设置？')
@@ -250,7 +315,8 @@ class MainWin(QMainWindow, Ui_MainWindow):
             with open('ddl.csv', 'w', newline='') as f:
                 writer = csv.writer(f)
                 for ddl in self.ddlList:
-                    writer.writerow(ddl.values())
+                    writer.writerow(
+                        iter([ddl['name'], ddl['date'], ddl['timespan'], ddl['location'], ddl['importance'], ddl['complete']]))
             self.ddlModified = False
 
     def settingSaveAction(self):
@@ -258,17 +324,22 @@ class MainWin(QMainWindow, Ui_MainWindow):
             pickle.dump(self.settings, f)
         self.main_update()
 
-    def ddlTableAddRow(self, name: str, date: (int, int, int), timespan: (int, int, int, int), location, importance):
+    def remove_color_calendar(self):  # remove all color format of calendar (replace the origin to NULL_TEXTCHARFORMAT)
+        for textDate, textFormat in self.calendarWidget.dateTextFormat().items():
+            self._remove_color_calendar(textDate)
+
+    def ddlTableAddRow(self, name: str, date: (int, int, int), timespan: (int, int, int, int), location, importance, complete):
         self.ddlList.append({
             'name': name, 'date': date, 'timespan': timespan, 'location': location,
-            'importance': importance
+            'importance': importance, 'complete': complete
         })
 
-    def ddlTableUpdate(self):
+    def ddlStateShowUpdate(self, showWarnTip=False):
         self._draw_color_calendar(QDate.currentDate(), QCOLOR_FAINTBLUE)
 
         self.ddlTableWidget.setRowCount(len(self.ddlList))
         self.statistics['number'] = len(self.ddlList)
+
         latest_count_down = '无'
         latest_count_down_seconds = 0
         latest_count_down_days = 0
@@ -281,6 +352,9 @@ class MainWin(QMainWindow, Ui_MainWindow):
         invalid_num = 0
         remain_num = 0
         for i, ddl in enumerate(self.ddlList):
+            if 'turn warning' not in ddl:
+                ddl['turn warning'] = False
+
             if ddl['timespan'] == ALL_DAY_TUPLE:
                 if self._date_now() < ddl['date']:
                     ddl['effect'] = True
@@ -301,6 +375,7 @@ class MainWin(QMainWindow, Ui_MainWindow):
         elif self.settings['sort rule'] == TIME_REMAIN_PRIORITY:
             ddlCmp = self._ddlCmp_timeremain
         self.ddlList.sort(key=cmp_to_key(ddlCmp))
+        turn_warning_flag = False  # mark turn warning ddl
         for i, ddl in enumerate(self.ddlList):
             self.ddlTableWidget.setItem(i, 0, QTableWidgetItem(ddl['name']))
             self.ddlTableWidget.setItem(i, 1, QTableWidgetItem('{:04d}-{:02d}-{:02d}'.format(ddl['date'][0], ddl['date'][1], ddl['date'][2])))
@@ -310,16 +385,19 @@ class MainWin(QMainWindow, Ui_MainWindow):
                 emergent_num += 1
                 self.ddlTableWidget.setItem(i, 4, QTableWidgetItem('紧急'))
                 self.ddlTableWidget.item(i, 4).setBackground(QBrush(QCOLOR_RED))
-                self._draw_color_calendar(self._date_tuple2QDate(ddl['date']), QCOLOR_RED)
+                if self._date_not_colored(self._date_tuple2QDate(ddl['date'])):
+                    self._draw_color_calendar(self._date_tuple2QDate(ddl['date']), QCOLOR_RED)
             elif ddl['importance'] == 1:
                 important_num += 1
                 self.ddlTableWidget.setItem(i, 4, QTableWidgetItem('重要'))
                 self.ddlTableWidget.item(i, 4).setBackground(QBrush(QCOLOR_ORANGE))
-                self._draw_color_calendar(self._date_tuple2QDate(ddl['date']), QCOLOR_ORANGE)
+                if self._date_not_colored(self._date_tuple2QDate(ddl['date'])):
+                    self._draw_color_calendar(self._date_tuple2QDate(ddl['date']), QCOLOR_ORANGE)
             elif ddl['importance'] == 2:
                 self.ddlTableWidget.setItem(i, 4, QTableWidgetItem('普通'))
                 self.ddlTableWidget.item(i, 4).setBackground(QBrush(QCOLOR_BLUEGREEN))
-                self._draw_color_calendar(self._date_tuple2QDate(ddl['date']), QCOLOR_BLUEGREEN)
+                if self._date_not_colored(self._date_tuple2QDate(ddl['date'])):
+                    self._draw_color_calendar(self._date_tuple2QDate(ddl['date']), QCOLOR_BLUEGREEN)
             else:
                 raise Exception('Illegal importance={} !'.format(ddl['importance']))
 
@@ -343,10 +421,20 @@ class MainWin(QMainWindow, Ui_MainWindow):
                     QCOLOR_YELLOWGREEN if count_down_time >= self.settings['count down warning time'] else QCOLOR_YELLOW
                 ))
                 ddl['count down time'] = count_down_time
+
+                if count_down_time < self.settings['count down warning time']:
+                    if not ddl['turn warning']:
+                        ddl['turn warning'] = True
+                        turn_warning_flag = True
             else:
                 invalid_num += 1
                 self.ddlTableWidget.setItem(i, 5, QTableWidgetItem('过期'))
                 self.ddlTableWidget.item(i, 5).setBackground(QBrush(QCOLOR_GREY))
+                self._draw_color_calendar(self._date_tuple2QDate(ddl['date']), QCOLOR_GREY)
+
+            self.ddlTableWidget.setItem(i, 6, QTableWidgetItem('未完成' if not ddl['complete'] else '已完成'))
+            self.ddlTableWidget.item(i, 6).setBackground(QBrush(QCOLOR_LIGHTGREEN if ddl['complete'] else QCOLOR_LIGHTORANGE))
+
         if earliest_count_down_seconds != +inf:
             earliest_count_down = '{} 天 {} 小时 {} 分'.format(
                 earliest_count_down_days, earliest_count_down_seconds // 3600,
@@ -363,6 +451,9 @@ class MainWin(QMainWindow, Ui_MainWindow):
         self.statistics['emergent'] = emergent_num
         self.statistics['important'] = important_num
         self.statistics['remain'] = self.statistics['number'] - self.statistics['invalid']
+
+        if self.settings['count down warning win'] and turn_warning_flag and not showWarnTip:
+            self.showWarnCountTimeWin()
 
 
     def noticeUpdate(self):
@@ -398,10 +489,10 @@ class MainWin(QMainWindow, Ui_MainWindow):
             with open('ddl.csv', 'r') as f:
                 ddl_list_t = csv.reader(f)
                 for ddl_item_t in ddl_list_t:
-                    self.ddlTableAddRow(ddl_item_t[0], eval(ddl_item_t[1]), eval(ddl_item_t[2]), ddl_item_t[3], eval(ddl_item_t[4]))
+                    self.ddlTableAddRow(ddl_item_t[0], eval(ddl_item_t[1]), eval(ddl_item_t[2]), ddl_item_t[3], eval(ddl_item_t[4]), eval(ddl_item_t[5]))
                     self.ddlSet.add(ddl_item_t[0])
         self.ddlTableWidget.setRowCount(len(self.ddlList))
-        self.main_update()
+        self.main_update(showWarnTip=True)
 
     def settingInit(self):
         if os.path.exists('config'):
@@ -411,20 +502,69 @@ class MainWin(QMainWindow, Ui_MainWindow):
     def setSortRuleAction(self, sortRule):
         self.settings['sort rule'] = sortRule
 
-    def setWarnAction(self, wday, whour, wminute, wshow):
+    def setWarnAction(self, wday, whour, wminute, wshow, tshow):
         self.settings['count down warning time'] = [wday, whour, wminute]
         self.settings['count down warning win'] = wshow
+        self.settings['show toast'] = IS_WIN10_SYS and tshow
+
+    def setRemTrayAction(self, is_remembered):
+        self.settings['remember close action'] = is_remembered
+
+    def setCloseAction(self, action: int):
+        if action == CLOSE_ACTION:
+            self.settings['minimize'] = False
+        elif action == MINIMIZE_ACTION:
+            self.settings['minimize'] = True
+
+    def alterCompleteAction(self):
+        row_index = self.ddlTableWidget.currentRow()
+        if self.ddlList[row_index]['complete']:
+            judgment = QMessageBox.question(self, '更改确定', '是否更改为未完成？')
+            if judgment == QMessageBox.Yes:
+                self.ddlList[row_index]['complete'] = False
+                self.ddlModified = True
+                self.completePushButton.setText('标记为已完成')
+                self.main_update()
+        else:
+            judgment = QMessageBox.question(self, '更改确定', '是否更改为已完成？')
+            if judgment == QMessageBox.Yes:
+                self.ddlList[row_index]['complete'] = True
+                self.ddlModified = True
+                self.completePushButton.setText('标记为未完成')
+                self.main_update()
 
     def showInfo(self):
-        QMessageBox.information(self, '关于本软件', 'ddl拯救者 (版本 v0.1)\n作者：徐大仙\nE-mail: xenon_xu@qq.com')
+        QMessageBox.information(self, '关于本软件', 'ddl拯救者 (版本 v0.1.2)\n作者：徐大仙\nE-mail: xenon_xu@qq.com')
 
-    def closeEvent(self, a0: QtGui.QCloseEvent) -> None:
+    def minimize_to_tray(self):
+        self.hide()
+        # self.trayicon.show()
+
+    def recover_from_tray(self):
+        self.show()
+        # self.trayicon.hide()
+
+    def ask_before_close(self):
         if self.ddlModified:
             judgment = QMessageBox.question(self, '退出', 'DDL修改未经保存，是否确认退出？')
             if judgment == QMessageBox.Yes:
-                a0.accept()
-            else:
+                self.trayicon.hide()
+                qApp.quit()
+        else:
+            self.trayicon.hide()
+            qApp.quit()
+
+    def closeEvent(self, a0: QtGui.QCloseEvent) -> None:
+        if not self.settings['remember close action']:
+            a0.ignore()
+            self.trayQuestionDialog.trayRadioButton.setChecked(True)
+            self.trayQuestionDialog.show()
+        else:
+            if self.settings['minimize']:
                 a0.ignore()
+                self.minimize_to_tray()
+            else:
+                self.ask_before_close()
 
 
 class addDdlWin(QDialog, Ui_addDdlDialog):
@@ -455,6 +595,7 @@ class addDdlWin(QDialog, Ui_addDdlDialog):
             self.timeEdit1.setEnabled(True)
             self.timeEdit2.setEnabled(True)
 
+
     def accept(self) -> None:
         name = self.nameLineEdit.text()
         date = (self.dateEdit.date().year(), self.dateEdit.date().month(), self.dateEdit.date().day())
@@ -484,8 +625,9 @@ class addDdlWin(QDialog, Ui_addDdlDialog):
 class setWin(QDialog, Ui_setWin):
 
     setSortRuleSignal = pyqtSignal(int)
-    setWarnSignal = pyqtSignal(int, int, int, bool)
+    setWarnSignal = pyqtSignal(int, int, int, bool, bool)
     showWarnWinButtonPressSignal = pyqtSignal()
+    remTrayCheckedSignal = pyqtSignal(bool)
     setFinishedSignal = pyqtSignal()
 
     def __init__(self, parent=None):
@@ -493,17 +635,56 @@ class setWin(QDialog, Ui_setWin):
         self.setupUi(self)
 
         self.setWindowFlags(Qt.WindowTitleHint)
+        if not IS_WIN10_SYS:
+            self.warningWinCheckBox.setChecked(False)
+            self.warningWinCheckBox.setEnabled(False)
 
     def showWarnWinButtonPressAction(self):
         self.showWarnWinButtonPressSignal.emit()
 
+    def setWarnSignalEmit(self):
+        self.setWarnSignal.emit(
+            self.countDownDaySpinBox.value(), self.countDownHourSpinBox.value(),
+            self.countDownMinuteSpinBox.value(), self.warningWinCheckBox.isChecked(),
+            self.warningToastCheckBox.isChecked())
+
     def accept(self) -> None:
         self.setSortRuleSignal.emit(self.sortRuleComboBox.currentIndex())
-        self.setWarnSignal.emit(
-            self.countDownDaySpinBox.value(), self.countDownHourSpinBox.value(), self.countDownMinuteSpinBox.value(), self.warningWinCheckBox.isChecked())
+        self.setWarnSignalEmit()
+        self.remTrayCheckedSignal.emit(self.remTrayCheckBox.isChecked())
 
         self.setFinishedSignal.emit()
         self.hide()
+
+
+class trayQuestionDialog(QDialog, Ui_trayQuestionDialog):
+
+    rememberTrayChoiceSignal = pyqtSignal(bool)
+    setCloseActionSignal = pyqtSignal(int)
+    minimizeToTraySignal = pyqtSignal()
+    exitSignal = pyqtSignal()
+    settingSaveActionSignal = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super(trayQuestionDialog, self).__init__(parent)
+        self.setupUi(self)
+        self.setWindowFlags(Qt.WindowTitleHint)
+
+    def accept(self) -> None:
+        if self.trayRadioButton.isChecked():  # main window to tray
+            self.setCloseActionSignal.emit(MINIMIZE_ACTION)
+            self.minimizeToTraySignal.emit()
+        elif self.exitRadioButton.isChecked():  # exit main window
+            self.setCloseActionSignal.emit(CLOSE_ACTION)
+            self.exitSignal.emit()
+        self.rememberTrayChoiceSignal.emit(self.remCheckBox.isChecked())  # remember choice
+        self.settingSaveActionSignal.emit()
+        self.hide()
+
+    def reject(self) -> None:
+        self.hide()
+
+
 
 
 if __name__ == '__main__':
